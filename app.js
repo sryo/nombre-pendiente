@@ -19,12 +19,17 @@ const state = {
     },
     previewVideoId: null,
     showPlayAgainModal: false,
+    transferTarget: null,    // userId of user to confirm transfer to
     reconnectAttempts: 0,
     connecting: false,
     pendingRoom: null,
     pendingCreate: null,
     pendingTopic: null,
+    pendingTransfer: null,   // { roomName, roomData } when being promoted to host
     view: 'home',      // 'home', 'room', 'loading'
+    homeRoomStatus: null,    // null | 'checking' | 'not-found'
+    homeInput: '',
+    editingUsername: false,
 };
 
 function init() {
@@ -68,6 +73,10 @@ function checkRoute() {
         state.hostConn = null;
         state.reconnectAttempts = 0;
         state.room = { phase: 'adding', videos: [], users: [], topic: '', currentVideoIndex: 0 };
+        state.pendingTransfer = null;
+        state.homeRoomStatus = null;
+        state.homeInput = '';
+        state.editingUsername = false;
         render();
     }
 }
@@ -92,27 +101,43 @@ function setupEventListeners() {
             }
         }
 
-        if (form.id === 'create-form') {
+        if (form.id === 'smart-room-form') {
             const nameInput = form.querySelector('input[name="room-name"]');
-            const topicInput = form.querySelector('input[name="room-topic"]');
             const name = nameInput.value.trim();
             if (!name) return;
-            const topic = topicInput ? topicInput.value.trim() : '';
-            if (!state.username) {
-                state.pendingRoom = null;
-                state.pendingCreate = name;
-                state.pendingTopic = topic;
-                render();
-                return;
-            }
-            createRoom(name, topic);
-        }
 
-        if (form.id === 'join-form') {
-            const input = form.querySelector('input');
-            const name = input.value.trim();
-            if (!name) return;
-            window.location.hash = '#/room/' + encodeURIComponent(name);
+            if (state.homeRoomStatus === null) {
+                state.homeInput = name;
+                state.homeRoomStatus = 'checking';
+                render();
+                checkRoomExists(name).then((exists) => {
+                    if (exists) {
+                        state.homeRoomStatus = null;
+                        state.homeInput = '';
+                        if (!state.username) {
+                            state.pendingRoom = name;
+                            render();
+                        } else {
+                            joinRoom(name);
+                        }
+                    } else {
+                        state.homeRoomStatus = 'not-found';
+                        render();
+                    }
+                });
+            } else if (state.homeRoomStatus === 'not-found') {
+                const topicInput = form.querySelector('input[name="room-topic"]');
+                const topic = topicInput ? topicInput.value.trim() : '';
+                state.homeRoomStatus = null;
+                state.homeInput = '';
+                if (!state.username) {
+                    state.pendingCreate = name;
+                    state.pendingTopic = topic;
+                    render();
+                } else {
+                    createRoom(name, topic);
+                }
+            }
         }
 
         if (form.id === 'play-again-form') {
@@ -126,6 +151,16 @@ function setupEventListeners() {
             const query = input.value.trim();
             if (!query) return;
             handleVideoInput(query);
+        }
+
+        if (form.id === 'edit-username-form') {
+            const input = form.querySelector('input');
+            const name = input.value.trim();
+            if (!name) return;
+            state.username = name;
+            localStorage.setItem('pb-username', name);
+            state.editingUsername = false;
+            render();
         }
     });
 
@@ -170,6 +205,29 @@ function setupEventListeners() {
                 break;
             case 'go-home':
                 window.location.hash = '';
+                break;
+            case 'home-reset':
+                state.homeRoomStatus = null;
+                state.homeInput = '';
+                render();
+                break;
+            case 'transfer-host':
+                state.transferTarget = btn.dataset.userId || null;
+                render();
+                break;
+            case 'confirm-transfer':
+                if (state.transferTarget) {
+                    transferHost(state.transferTarget);
+                    state.transferTarget = null;
+                }
+                break;
+            case 'cancel-transfer':
+                state.transferTarget = null;
+                render();
+                break;
+            case 'edit-username':
+                state.editingUsername = true;
+                render();
                 break;
             case 'cancel-play-again':
                 cancelPlayAgain();
@@ -282,6 +340,11 @@ function joinRoom(roomName) {
 
         conn.on('close', () => {
             state.hostConn = null;
+            if (state.pendingTransfer) {
+                const { roomName: transferRoom, roomData } = state.pendingTransfer;
+                becomeHost(transferRoom, roomData);
+                return;
+            }
             if (state.reconnectAttempts < 3) {
                 state.reconnectAttempts++;
                 showToast(`Reconectando... (intento ${state.reconnectAttempts}/3)`, 'error');
@@ -403,6 +466,10 @@ function handleHostMessage(data) {
             state.room = data.room;
             render();
             break;
+        case 'transfer':
+            state.pendingTransfer = { roomName: data.roomName, roomData: data.room };
+            showToast('Te transfirieron el host...', 'success');
+            break;
         case 'error':
             showToast(data.message, 'error');
             break;
@@ -413,6 +480,96 @@ function broadcastState() {
     const msg = { type: 'state', room: state.room };
     state.connections.forEach(conn => {
         if (conn.open) conn.send(msg);
+    });
+}
+
+function transferHost(targetUserId) {
+    const targetConn = state.connections.find(c => c._userId === targetUserId);
+    if (!targetConn || !targetConn.open) {
+        showToast('El usuario no está conectado', 'error');
+        return;
+    }
+
+    const roomName = state.roomName;
+    const roomData = JSON.parse(JSON.stringify(state.room));
+
+    targetConn.send({ type: 'transfer', room: roomData, roomName });
+    showToast('Transfiriendo host...', 'success');
+
+    setTimeout(() => {
+        if (state.peer) {
+            state.peer.destroy();
+            state.peer = null;
+        }
+        state.isHost = false;
+        state.connections = [];
+        state.hostConn = null;
+
+        setTimeout(() => {
+            joinRoom(roomName);
+        }, 2500);
+    }, 500);
+}
+
+function becomeHost(roomName, roomData) {
+    if (state.peer) {
+        state.peer.destroy();
+        state.peer = null;
+    }
+    state.pendingTransfer = null;
+    state.hostConn = null;
+    state.view = 'loading';
+    state.connecting = true;
+    state.roomName = roomName;
+    render();
+
+    const sanitized = sanitizeRoomName(roomName);
+    attemptHostClaim(roomName, sanitized, roomData, 1);
+}
+
+function attemptHostClaim(roomName, sanitized, roomData, attempt) {
+    const peerId = PEER_PREFIX + sanitized;
+    const peer = new Peer(peerId);
+
+    peer.on('open', () => {
+        state.peer = peer;
+        state.isHost = true;
+        state.connecting = false;
+        state.connections = [];
+        state.room = roomData;
+        state.view = 'room';
+        window.location.hash = '#/room/' + encodeURIComponent(roomName);
+        render();
+        showToast('Ahora sos el host', 'success');
+
+        peer.on('connection', (conn) => {
+            handleNewConnection(conn);
+        });
+
+        peer.on('disconnected', () => {
+            if (state.isHost) {
+                peer.reconnect();
+            }
+        });
+
+        broadcastState();
+    });
+
+    peer.on('error', (err) => {
+        if (err.type === 'unavailable-id' && attempt < 5) {
+            try { peer.destroy(); } catch {}
+            setTimeout(() => {
+                attemptHostClaim(roomName, sanitized, roomData, attempt + 1);
+            }, 2000);
+        } else {
+            try { peer.destroy(); } catch {}
+            state.connecting = false;
+            showToast('No se pudo tomar el control de la sala', 'error');
+            state.view = 'home';
+            state.roomName = '';
+            window.location.hash = '';
+            render();
+        }
     });
 }
 
@@ -576,6 +733,24 @@ function cancelPlayAgain() {
     render();
 }
 
+function renderTransferModal() {
+    if (!state.transferTarget) return '';
+    const user = state.room.users.find(u => u.id === state.transferTarget);
+    const name = user ? escapeHtml(user.name) : 'este usuario';
+    return `
+        <div class="modal-overlay">
+            <div class="modal">
+                <h2>Transferir host</h2>
+                <p>Transferir el control de la sala a <strong>${name}</strong>?</p>
+                <div class="form-group">
+                    <button class="btn btn-primary" data-action="confirm-transfer">Transferir</button>
+                    <button class="btn btn-secondary" data-action="cancel-transfer">Cancelar</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 function renderPlayAgainModal() {
     if (!state.showPlayAgainModal) return '';
     return `
@@ -649,33 +824,57 @@ function renderUsernameModal() {
 }
 
 function renderHome() {
+    const status = state.homeRoomStatus;
+    let cardContent = '';
+
+    if (status === null) {
+        cardContent = `
+            <h2>Ir a sala</h2>
+            <p>Buscá una sala o creá una nueva</p>
+            <form id="smart-room-form" class="form-group">
+                <input type="text" name="room-name" placeholder="Nombre de la sala" required maxlength="30" value="${escapeHtml(state.homeInput)}">
+                <button type="submit" class="btn btn-primary">Ir a sala</button>
+            </form>`;
+    } else if (status === 'checking') {
+        cardContent = `
+            <h2>Ir a sala</h2>
+            <p>Buscando sala...</p>
+            <form id="smart-room-form" class="form-group">
+                <input type="text" name="room-name" value="${escapeHtml(state.homeInput)}" readonly maxlength="30">
+                <button type="submit" class="btn btn-primary" disabled>Buscando...</button>
+            </form>`;
+    } else if (status === 'not-found') {
+        cardContent = `
+            <h2>Ir a sala</h2>
+            <p class="room-status">No se encontró la sala "${escapeHtml(state.homeInput)}"</p>
+            <form id="smart-room-form" class="form-group">
+                <input type="text" name="room-name" value="${escapeHtml(state.homeInput)}" readonly maxlength="30">
+                <input type="text" name="room-topic" placeholder="Consigna (opcional)" maxlength="60">
+                <button type="submit" class="btn btn-primary">Crear sala</button>
+            </form>
+            <button class="btn-link" data-action="home-reset">Volver a buscar</button>`;
+    }
+
+    const userBadge = state.editingUsername
+        ? `<form id="edit-username-form" class="username-edit-form">
+                <input type="text" value="${escapeHtml(state.username)}" maxlength="20" required>
+                <button type="submit" class="btn btn-small btn-primary">Guardar</button>
+           </form>`
+        : `<span class="badge badge-you badge-editable" data-action="edit-username">Jugando como: ${escapeHtml(state.username)} &#9998;</span>`;
+
     return `
         <div class="container">
             <header class="hero">
                 <h1>Nombre Pendiente</h1>
                 <p class="subtitle">Agregá videos, votá y elegí al ganador</p>
             </header>
-            <div class="home-grid">
+            <div class="home-card-wrapper">
                 <div class="card">
-                    <h2>Crear sala</h2>
-                    <p>Creá una sala y compartila</p>
-                    <form id="create-form" class="form-group">
-                        <input type="text" name="room-name" placeholder="Nombre de la sala" required maxlength="30">
-                        <input type="text" name="room-topic" placeholder="Temática (opcional)" maxlength="60">
-                        <button type="submit" class="btn btn-primary">Crear sala</button>
-                    </form>
-                </div>
-                <div class="card">
-                    <h2>Unirse</h2>
-                    <p>Entrá a la sala de un amigo</p>
-                    <form id="join-form" class="form-group">
-                        <input type="text" placeholder="Nombre de la sala" required maxlength="30">
-                        <button type="submit" class="btn btn-secondary">Entrar</button>
-                    </form>
+                    ${cardContent}
                 </div>
             </div>
             <div style="text-align:center; margin-top:24px;">
-                <span class="badge badge-you">Jugando como: ${escapeHtml(state.username)}</span>
+                ${userBadge}
             </div>
         </div>
     `;
@@ -724,7 +923,10 @@ function renderRoom() {
         const hasVoted = votedUserIds.has(u.id);
         const classes = ['user-tag', isYou ? 'you' : '', hasVoted ? 'voted' : ''].filter(Boolean).join(' ');
         const label = escapeHtml(u.name) + (isYou ? ' (vos)' : '') + (hasVoted ? ' ✓' : '');
-        return `<span class="${classes}">${label}</span>`;
+        const transferBtn = (state.isHost && !isYou)
+            ? `<button class="transfer-host-btn" data-action="transfer-host" data-user-id="${escapeHtml(u.id)}" title="Transferir host">&#8644;</button>`
+            : '';
+        return `<span class="${classes}">${label}${transferBtn}</span>`;
     }).join('');
 
     return `
@@ -750,6 +952,7 @@ function renderRoom() {
         </div>
         ${renderPreviewModal()}
         ${renderPlayAgainModal()}
+        ${renderTransferModal()}
     `;
 }
 
@@ -979,6 +1182,42 @@ function sanitizeRoomName(name) {
         .replace(/[^a-z0-9]/g, '-')
         .replace(/-+/g, '-')
         .replace(/^-|-$/g, '');
+}
+
+function checkRoomExists(roomName) {
+    const sanitized = sanitizeRoomName(roomName);
+    if (!sanitized) return Promise.resolve(false);
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = (result) => {
+            if (settled) return;
+            settled = true;
+            try { tempPeer.destroy(); } catch {}
+            resolve(result);
+        };
+        const tempPeer = new Peer();
+        const timeout = setTimeout(() => finish(false), 5000);
+        tempPeer.on('open', () => {
+            const conn = tempPeer.connect(PEER_PREFIX + sanitized, { reliable: true });
+            conn.on('open', () => {
+                clearTimeout(timeout);
+                conn.close();
+                finish(true);
+            });
+            conn.on('error', () => {
+                clearTimeout(timeout);
+                finish(false);
+            });
+        });
+        tempPeer.on('error', (err) => {
+            clearTimeout(timeout);
+            if (err.type === 'peer-unavailable') {
+                finish(false);
+            } else {
+                finish(false);
+            }
+        });
+    });
 }
 
 function escapeHtml(str) {

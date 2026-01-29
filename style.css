@@ -133,23 +133,58 @@ h3 {
     margin-bottom: 20px;
 }
 
-/* Home Grid */
-.home-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-    max-width: 700px;
+/* Home Card Wrapper */
+.home-card-wrapper {
+    max-width: 440px;
     margin: 0 auto;
 }
 
 @media (max-width: 600px) {
-    .home-grid {
-        grid-template-columns: 1fr;
-    }
-
     .hero h1 {
         font-size: 2rem;
     }
+}
+
+/* Room status message */
+.room-status {
+    color: var(--warning);
+}
+
+/* Ghost/text button */
+.btn-link {
+    display: inline-block;
+    margin-top: 12px;
+    background: none;
+    border: none;
+    color: var(--purple-light);
+    font-size: 0.9rem;
+    font-weight: 600;
+    font-family: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+    padding: 4px 0;
+}
+
+.btn-link:hover {
+    color: var(--purple);
+}
+
+/* Editable username badge */
+.badge-editable {
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.badge-editable:hover {
+    opacity: 0.8;
+}
+
+/* Inline username edit form */
+.username-edit-form {
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
 }
 
 /* Forms */
@@ -884,6 +919,30 @@ input[readonly] {
     background: var(--purple);
     color: var(--text-dark);
     border: 2px solid var(--success);
+}
+
+.transfer-host-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    margin-left: 4px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.15);
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    vertical-align: middle;
+    line-height: 1;
+}
+
+.transfer-host-btn:hover {
+    background: var(--yellow);
+    color: var(--text-dark);
 }
 
 @keyframes pulse-glow {
