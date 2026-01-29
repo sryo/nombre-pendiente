@@ -803,8 +803,8 @@ function renderVotingPhase() {
     const embedHtml = `
         <div class="voting-player-embed">
             <iframe
-                src="https://www.youtube.com/embed/${escapeHtml(current.id)}?autoplay=0"
-                allow="encrypted-media"
+                src="https://www.youtube.com/embed/${escapeHtml(current.id)}?autoplay=1"
+                allow="autoplay; encrypted-media"
                 allowfullscreen>
             </iframe>
         </div>`;
