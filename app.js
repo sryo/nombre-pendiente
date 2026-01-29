@@ -19,7 +19,9 @@ const state = {
         phase: 'adding',
         videos: [],
         users: [],
+        topic: '',
     },
+    previewVideoId: null,
     connecting: false,
     view: 'home',      // 'home', 'room', 'loading'
 };
@@ -60,7 +62,8 @@ function checkRoute() {
         state.isHost = false;
         state.connections = [];
         state.hostConn = null;
-        state.room = { phase: 'adding', videos: [], users: [] };
+        state.room = { phase: 'adding', videos: [], users: [], topic: '' };
+        render();
     }
 }
 
@@ -86,16 +89,19 @@ function setupEventListeners() {
         }
 
         if (form.id === 'create-form') {
-            const input = form.querySelector('input');
-            const name = input.value.trim();
+            const nameInput = form.querySelector('input[name="room-name"]');
+            const topicInput = form.querySelector('input[name="room-topic"]');
+            const name = nameInput.value.trim();
             if (!name) return;
+            const topic = topicInput ? topicInput.value.trim() : '';
             if (!state.username) {
                 state.pendingRoom = null;
                 state.pendingCreate = name;
+                state.pendingTopic = topic;
                 render();
                 return;
             }
-            createRoom(name);
+            createRoom(name, topic);
         }
 
         if (form.id === 'join-form') {
@@ -135,6 +141,14 @@ function setupEventListeners() {
             case 'remove-video':
                 removeVideo(btn.dataset.videoId);
                 break;
+            case 'preview':
+                state.previewVideoId = btn.dataset.videoId;
+                render();
+                break;
+            case 'close-preview':
+                state.previewVideoId = null;
+                render();
+                break;
             case 'go-home':
                 window.location.hash = '';
                 break;
@@ -150,7 +164,7 @@ function setupEventListeners() {
 }
 
 // --- PeerJS: Create Room ---
-function createRoom(roomName) {
+function createRoom(roomName, topic) {
     const sanitized = sanitizeRoomName(roomName);
     if (!sanitized) {
         showToast('Nombre de sala no valido', 'error');
@@ -173,6 +187,7 @@ function createRoom(roomName) {
             phase: 'adding',
             videos: [],
             users: [{ id: state.userId, name: state.username }],
+            topic: topic || '',
         };
         window.location.hash = '#/room/' + encodeURIComponent(roomName);
         state.view = 'room';
@@ -302,6 +317,11 @@ function handleGuestAction(conn, data) {
         }
         case 'add-video': {
             if (state.room.phase !== 'adding') return;
+            const alreadyAdded = state.room.videos.find(v => v.addedBy === data.video.addedBy);
+            if (alreadyAdded) {
+                conn.send({ type: 'error', message: 'Ya agregaste tu video para esta ronda' });
+                return;
+            }
             const dup = state.room.videos.find(v => v.id === data.video.id);
             if (dup) {
                 conn.send({ type: 'error', message: 'Ese video ya esta en la playlist' });
@@ -388,6 +408,11 @@ async function fetchVideoInfo(videoId) {
 
 // --- Actions ---
 async function handleVideoInput(query) {
+    const alreadyAdded = state.room.videos.find(v => v.addedBy === state.username);
+    if (alreadyAdded) {
+        showToast('Ya agregaste tu video para esta ronda', 'error');
+        return;
+    }
     const videoId = extractVideoId(query);
     if (!videoId) {
         showToast('Pega un link de YouTube valido', 'error');
@@ -475,14 +500,17 @@ function nextPhase() {
     } else if (state.room.phase === 'voting') {
         state.room.phase = 'results';
     }
+    state.previewVideoId = null;
     broadcastState();
     render();
 }
 
 function playAgain() {
     if (!state.isHost) return;
+    const newTopic = prompt('Tematica para la nueva ronda (dejar vacio para tema libre):') || '';
     state.room.phase = 'adding';
     state.room.videos = [];
+    state.room.topic = newTopic.trim();
     broadcastState();
     render();
 }
@@ -502,8 +530,10 @@ function render() {
     // Show creating username for pending actions
     if (state.pendingCreate) {
         const name = state.pendingCreate;
+        const topic = state.pendingTopic || '';
         state.pendingCreate = null;
-        createRoom(name);
+        state.pendingTopic = null;
+        createRoom(name, topic);
         return;
     }
 
@@ -547,7 +577,8 @@ function renderHome() {
                     <h2>Crear Sala</h2>
                     <p>Crea una sala nueva y compartila con tus amigos</p>
                     <form id="create-form" class="form-group">
-                        <input type="text" placeholder="Nombre de la sala" required maxlength="30">
+                        <input type="text" name="room-name" placeholder="Nombre de la sala" required maxlength="30">
+                        <input type="text" name="room-topic" placeholder="Tematica (opcional)" maxlength="60">
                         <button type="submit" class="btn btn-primary">Crear Sala</button>
                     </form>
                 </div>
@@ -608,7 +639,6 @@ function renderRoom() {
     return `
         <div class="container fade-in">
             <div class="room-header">
-                <h1>${escapeHtml(state.roomName)}</h1>
                 <div class="share-row">
                     <input type="text" value="${escapeHtml(shareUrl)}" readonly id="share-url">
                     <button class="btn btn-small btn-secondary" data-action="copy-url">Copiar</button>
@@ -620,27 +650,34 @@ function renderRoom() {
                 </div>
                 ${users.length > 0 ? `<div class="users-list" style="margin-top:12px">${userTags}</div>` : ''}
             </div>
+            ${state.room.topic ? `<div class="topic-banner">${escapeHtml(state.room.topic)}</div>` : ''}
             ${content}
             <div style="text-align:center; padding-top:16px;">
                 <button class="btn btn-small btn-secondary" data-action="go-home">Salir de la sala</button>
             </div>
         </div>
+        ${renderPreviewModal()}
     `;
 }
 
 function renderAddingPhase() {
     const { videos } = state.room;
+    const hasAdded = videos.some(v => v.addedBy === state.username);
 
     const videosHtml = videos.length === 0
         ? '<div class="empty-state"><p>Pega un link de YouTube para agregar un video.</p></div>'
         : `<div class="video-grid">${videos.map(v => renderVideoCard(v, 'adding')).join('')}</div>`;
 
-    return `
-        <div class="section">
-            <form id="video-form" class="search-form">
+    const formHtml = hasAdded
+        ? `<div class="added-message">Ya agregaste tu video para esta ronda</div>`
+        : `<form id="video-form" class="search-form">
                 <input type="text" placeholder="Pegar link de YouTube" required>
                 <button type="submit" class="btn btn-primary">Agregar</button>
-            </form>
+            </form>`;
+
+    return `
+        <div class="section">
+            ${formHtml}
         </div>
         <div class="section">
             <div class="section-header">
@@ -769,8 +806,9 @@ function renderVideoCard(video, phase) {
 
     return `
         <div class="video-card">
-            <div class="thumb-container">
+            <div class="thumb-container" data-action="preview" data-video-id="${escapeHtml(video.id)}" style="cursor:pointer">
                 <img src="${escapeHtml(video.thumbnail)}" alt="${escapeHtml(video.title)}" loading="lazy">
+                <div class="play-overlay">&#9654;</div>
                 ${removeBtn}
             </div>
             <div class="video-info">
@@ -778,6 +816,24 @@ function renderVideoCard(video, phase) {
                 <div class="video-author">${state.room.phase === 'results' ? escapeHtml(video.addedBy) : ''}</div>
             </div>
             ${voteSection}
+        </div>
+    `;
+}
+
+function renderPreviewModal() {
+    if (!state.previewVideoId) return '';
+    return `
+        <div class="modal-overlay" data-action="close-preview">
+            <div class="preview-modal">
+                <button class="preview-close-btn" data-action="close-preview">&times;</button>
+                <div class="preview-player" onclick="event.stopPropagation()">
+                    <iframe
+                        src="https://www.youtube.com/embed/${escapeHtml(state.previewVideoId)}?autoplay=1"
+                        allow="autoplay; encrypted-media"
+                        allowfullscreen>
+                    </iframe>
+                </div>
+            </div>
         </div>
     `;
 }
