@@ -4,10 +4,6 @@
 
 // --- Constants ---
 const PEER_PREFIX = 'plbattle-';
-const PIPED_INSTANCES = [
-    'https://pipedapi.kavin.rocks',
-    'https://pipedapi.adminforge.de',
-];
 const NOEMBED_URL = 'https://noembed.com/embed';
 
 // --- State ---
@@ -24,8 +20,6 @@ const state = {
         videos: [],
         users: [],
     },
-    searchResults: [],
-    searching: false,
     connecting: false,
     view: 'home',      // 'home', 'room', 'loading'
 };
@@ -67,8 +61,6 @@ function checkRoute() {
         state.connections = [];
         state.hostConn = null;
         state.room = { phase: 'adding', videos: [], users: [] };
-        state.searchResults = [];
-        render();
     }
 }
 
@@ -131,9 +123,6 @@ function setupEventListeners() {
             case 'copy-url':
                 copyShareUrl();
                 break;
-            case 'add-result':
-                addSearchResult(parseInt(btn.dataset.index));
-                break;
             case 'vote':
                 voteForVideo(btn.dataset.videoId);
                 break;
@@ -148,10 +137,6 @@ function setupEventListeners() {
                 break;
             case 'go-home':
                 window.location.hash = '';
-                break;
-            case 'clear-search':
-                state.searchResults = [];
-                render();
                 break;
         }
     });
@@ -400,68 +385,28 @@ async function fetchVideoInfo(videoId) {
     }
 }
 
-// --- YouTube: Search videos via Piped API ---
-async function searchVideos(query) {
-    for (const instance of PIPED_INSTANCES) {
-        try {
-            const resp = await fetch(`${instance}/search?q=${encodeURIComponent(query)}&filter=videos`);
-            if (!resp.ok) continue;
-            const data = await resp.json();
-            const items = data.items || data;
-            return items
-                .filter(item => item.url || item.videoId)
-                .slice(0, 6)
-                .map(item => {
-                    const videoId = item.videoId || item.url?.replace('/watch?v=', '') || '';
-                    return {
-                        id: videoId,
-                        title: item.title || '',
-                        thumbnail: `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`,
-                        author: item.uploaderName || item.author || '',
-                        duration: item.duration || 0,
-                    };
-                });
-        } catch {
-            continue;
-        }
-    }
-    return null;
-}
 
 // --- Actions ---
 async function handleVideoInput(query) {
     const videoId = extractVideoId(query);
-    if (videoId) {
-        // It's a YouTube URL/ID - add directly
-        const dup = state.room.videos.find(v => v.id === videoId);
-        if (dup) {
-            showToast('Ese video ya esta en la playlist', 'error');
-            return;
-        }
-        showToast('Agregando video...', 'success');
-        const info = await fetchVideoInfo(videoId);
-        addVideoToRoom({
-            ...info,
-            addedBy: state.username,
-            votes: [],
-        });
-        const input = document.querySelector('#video-form input');
-        if (input) input.value = '';
-    } else {
-        // It's a search query
-        state.searching = true;
-        state.searchResults = [];
-        render();
-        const results = await searchVideos(query);
-        state.searching = false;
-        if (results && results.length > 0) {
-            state.searchResults = results;
-        } else {
-            state.searchResults = [];
-            showToast('No se encontraron resultados. Podes pegar un link de YouTube directamente.', 'error');
-        }
-        render();
+    if (!videoId) {
+        showToast('Pega un link de YouTube valido', 'error');
+        return;
     }
+    const dup = state.room.videos.find(v => v.id === videoId);
+    if (dup) {
+        showToast('Ese video ya esta en la playlist', 'error');
+        return;
+    }
+    showToast('Agregando video...', 'success');
+    const info = await fetchVideoInfo(videoId);
+    addVideoToRoom({
+        ...info,
+        addedBy: state.username,
+        votes: [],
+    });
+    const input = document.querySelector('#video-form input');
+    if (input) input.value = '';
 }
 
 function addVideoToRoom(video) {
@@ -477,24 +422,6 @@ function addVideoToRoom(video) {
     } else if (state.hostConn) {
         state.hostConn.send({ type: 'add-video', video });
     }
-}
-
-function addSearchResult(index) {
-    const result = state.searchResults[index];
-    if (!result) return;
-    addVideoToRoom({
-        id: result.id,
-        title: result.title,
-        thumbnail: result.thumbnail,
-        author: result.author,
-        addedBy: state.username,
-        votes: [],
-    });
-    state.searchResults = [];
-    const input = document.querySelector('#video-form input');
-    if (input) input.value = '';
-    render();
-    showToast('Video agregado', 'success');
 }
 
 function voteForVideo(videoId) {
@@ -704,39 +631,16 @@ function renderRoom() {
 function renderAddingPhase() {
     const { videos } = state.room;
 
-    const searchResultsHtml = state.searching
-        ? '<div class="empty-state"><div class="spinner"></div><p>Buscando...</p></div>'
-        : state.searchResults.length > 0
-            ? `
-                <div class="search-results">
-                    <div class="section-header">
-                        <h2>Resultados</h2>
-                        <button class="btn btn-small btn-secondary" data-action="clear-search">Cerrar</button>
-                    </div>
-                    ${state.searchResults.map((r, i) => `
-                        <div class="search-result-item" data-action="add-result" data-index="${i}">
-                            <img src="${escapeHtml(r.thumbnail)}" alt="">
-                            <div class="search-result-info">
-                                <h4>${escapeHtml(r.title)}</h4>
-                                <span>${escapeHtml(r.author)}</span>
-                            </div>
-                        </div>
-                    `).join('')}
-                </div>
-            `
-            : '';
-
     const videosHtml = videos.length === 0
-        ? '<div class="empty-state"><p>No hay videos todavia. Busca o pega un link para agregar.</p></div>'
+        ? '<div class="empty-state"><p>Pega un link de YouTube para agregar un video.</p></div>'
         : `<div class="video-grid">${videos.map(v => renderVideoCard(v, 'adding')).join('')}</div>`;
 
     return `
         <div class="section">
             <form id="video-form" class="search-form">
-                <input type="text" placeholder="Buscar video o pegar link de YouTube" required>
-                <button type="submit" class="btn btn-primary">${state.searching ? 'Buscando...' : 'Agregar'}</button>
+                <input type="text" placeholder="Pegar link de YouTube" required>
+                <button type="submit" class="btn btn-primary">Agregar</button>
             </form>
-            ${searchResultsHtml}
         </div>
         <div class="section">
             <div class="section-header">
@@ -824,7 +728,7 @@ function renderResultsPhase() {
                             <img src="${escapeHtml(v.thumbnail)}" alt="">
                             <div class="result-info">
                                 <h4>${escapeHtml(v.title)}</h4>
-                                <span>Agregado por ${escapeHtml(v.addedBy)}</span>
+                                <span>${escapeHtml(v.addedBy)}</span>
                             </div>
                             <div class="result-votes">${v.votes.length} voto${v.votes.length !== 1 ? 's' : ''}</div>
                         </div>
@@ -871,7 +775,7 @@ function renderVideoCard(video, phase) {
             </div>
             <div class="video-info">
                 <div class="video-title">${escapeHtml(video.title)}</div>
-                <div class="video-author">${escapeHtml(video.addedBy)}</div>
+                <div class="video-author">${state.room.phase === 'results' ? escapeHtml(video.addedBy) : ''}</div>
             </div>
             ${voteSection}
         </div>
