@@ -1,12 +1,7 @@
-// ==========================================
-// Nombre Pendiente - Main Application
-// ==========================================
-
-// --- Constants ---
 const PEER_PREFIX = 'plbattle-';
 const NOEMBED_URL = 'https://noembed.com/embed';
+const disconnectTimeouts = new Map();
 
-// --- State ---
 const state = {
     userId: null,
     username: '',
@@ -24,12 +19,13 @@ const state = {
     previewVideoId: null,
     showPlayAgainModal: false,
     reconnectAttempts: 0,
-    reconnecting: false,
     connecting: false,
+    pendingRoom: null,
+    pendingCreate: null,
+    pendingTopic: null,
     view: 'home',      // 'home', 'room', 'loading'
 };
 
-// --- Initialization ---
 function init() {
     state.userId = localStorage.getItem('pb-userid');
     if (!state.userId) {
@@ -69,14 +65,12 @@ function checkRoute() {
         state.isHost = false;
         state.connections = [];
         state.hostConn = null;
-        state.reconnecting = false;
         state.reconnectAttempts = 0;
         state.room = { phase: 'adding', videos: [], users: [], topic: '' };
         render();
     }
 }
 
-// --- Event Listeners (Delegation) ---
 function setupEventListeners() {
     document.addEventListener('submit', (e) => {
         e.preventDefault();
@@ -181,7 +175,6 @@ function setupEventListeners() {
     });
 }
 
-// --- PeerJS: Create Room ---
 function createRoom(roomName, topic) {
     const sanitized = sanitizeRoomName(roomName);
     if (!sanitized) {
@@ -236,7 +229,6 @@ function createRoom(roomName, topic) {
     });
 }
 
-// --- PeerJS: Join Room ---
 function joinRoom(roomName) {
     const sanitized = sanitizeRoomName(roomName);
     if (!sanitized) {
@@ -244,7 +236,7 @@ function joinRoom(roomName) {
         return;
     }
 
-    if (!state.reconnecting) {
+    if (state.reconnectAttempts === 0) {
         state.view = 'loading';
         state.connecting = true;
     }
@@ -268,7 +260,6 @@ function joinRoom(roomName) {
             state.isHost = false;
             state.connecting = false;
             state.reconnectAttempts = 0;
-            state.reconnecting = false;
             state.view = 'room';
             conn.send({ type: 'join', userId: state.userId, username: state.username });
             render();
@@ -281,13 +272,15 @@ function joinRoom(roomName) {
         conn.on('close', () => {
             state.hostConn = null;
             if (state.reconnectAttempts < 3) {
-                state.reconnecting = true;
                 state.reconnectAttempts++;
                 showToast(`Reconectando... (intento ${state.reconnectAttempts}/3)`, 'error');
                 render();
-                setTimeout(() => joinRoom(roomName), 2000);
+                const targetRoom = roomName;
+                setTimeout(() => {
+                    if (state.roomName !== targetRoom) return;
+                    joinRoom(roomName);
+                }, 2000);
             } else {
-                state.reconnecting = false;
                 state.reconnectAttempts = 0;
                 showToast('Se perdió la conexión con la sala', 'error');
                 state.view = 'home';
@@ -298,7 +291,7 @@ function joinRoom(roomName) {
         });
 
         conn.on('error', (err) => {
-            if (!state.reconnecting) {
+            if (state.reconnectAttempts === 0) {
                 showToast('Error de conexión: ' + err, 'error');
             }
         });
@@ -306,10 +299,7 @@ function joinRoom(roomName) {
 
     peer.on('error', (err) => {
         state.connecting = false;
-        if (state.reconnecting) {
-            // Let retry continue
-            return;
-        }
+        if (state.reconnectAttempts > 0) return;
         if (err.type === 'peer-unavailable') {
             showToast('La sala no existe o el host se desconectó', 'error');
         } else {
@@ -322,7 +312,6 @@ function joinRoom(roomName) {
     });
 }
 
-// --- PeerJS: Host handles new guest connection ---
 function handleNewConnection(conn) {
     conn.on('open', () => {
         state.connections.push(conn);
@@ -335,26 +324,34 @@ function handleNewConnection(conn) {
 
     conn.on('close', () => {
         state.connections = state.connections.filter(c => c !== conn);
-        // Delayed removal: wait 15s for reconnection before removing user
+        // Wait 15s for reconnection before removing user
         if (conn._userId) {
-            const disconnectedUserId = conn._userId;
-            setTimeout(() => {
-                const hasActiveConn = state.connections.some(c => c._userId === disconnectedUserId && c.open);
+            const userId = conn._userId;
+            if (disconnectTimeouts.has(userId)) {
+                clearTimeout(disconnectTimeouts.get(userId));
+            }
+            const timeoutId = setTimeout(() => {
+                disconnectTimeouts.delete(userId);
+                const hasActiveConn = state.connections.some(c => c._userId === userId && c.open);
                 if (!hasActiveConn) {
-                    state.room.users = state.room.users.filter(u => u.id !== disconnectedUserId);
+                    state.room.users = state.room.users.filter(u => u.id !== userId);
                     broadcastState();
                     render();
                 }
             }, 15000);
+            disconnectTimeouts.set(userId, timeoutId);
         }
     });
 }
 
-// --- PeerJS: Host processes guest actions ---
 function handleGuestAction(conn, data) {
     switch (data.type) {
         case 'join': {
             conn._userId = data.userId;
+            if (disconnectTimeouts.has(data.userId)) {
+                clearTimeout(disconnectTimeouts.get(data.userId));
+                disconnectTimeouts.delete(data.userId);
+            }
             const exists = state.room.users.find(u => u.id === data.userId);
             if (!exists) {
                 state.room.users.push({ id: data.userId, name: data.username });
@@ -381,15 +378,7 @@ function handleGuestAction(conn, data) {
         }
         case 'vote': {
             if (state.room.phase !== 'voting') return;
-            // Remove previous vote from this user
-            state.room.videos.forEach(v => {
-                v.votes = v.votes.filter(uid => uid !== data.userId);
-            });
-            // Add vote if not un-voting
-            const video = state.room.videos.find(v => v.id === data.videoId);
-            if (video && !data.unvote) {
-                video.votes.push(data.userId);
-            }
+            applyVote(data.userId, data.videoId, data.unvote);
             break;
         }
     }
@@ -397,7 +386,6 @@ function handleGuestAction(conn, data) {
     render();
 }
 
-// --- PeerJS: Guest processes host messages ---
 function handleHostMessage(data) {
     switch (data.type) {
         case 'state':
@@ -410,7 +398,6 @@ function handleHostMessage(data) {
     }
 }
 
-// --- PeerJS: Host broadcasts state to all guests ---
 function broadcastState() {
     const msg = { type: 'state', room: state.room };
     state.connections.forEach(conn => {
@@ -418,7 +405,6 @@ function broadcastState() {
     });
 }
 
-// --- YouTube: Extract video ID ---
 function extractVideoId(input) {
     const patterns = [
         /(?:youtube\.com\/watch\?.*v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
@@ -431,7 +417,6 @@ function extractVideoId(input) {
     return null;
 }
 
-// --- YouTube: Fetch video info from URL ---
 async function fetchVideoInfo(videoId) {
     const url = `https://www.youtube.com/watch?v=${videoId}`;
     try {
@@ -454,8 +439,6 @@ async function fetchVideoInfo(videoId) {
     }
 }
 
-
-// --- Actions ---
 async function handleVideoInput(query) {
     const alreadyAdded = state.room.videos.find(v => v.addedBy === state.username);
     if (alreadyAdded) {
@@ -485,11 +468,6 @@ async function handleVideoInput(query) {
 
 function addVideoToRoom(video) {
     if (state.isHost) {
-        const dup = state.room.videos.find(v => v.id === video.id);
-        if (dup) {
-            showToast('Ese video ya está en la playlist', 'error');
-            return;
-        }
         state.room.videos.push(video);
         broadcastState();
         render();
@@ -498,35 +476,35 @@ function addVideoToRoom(video) {
     }
 }
 
+function isUnvote(userId, videoId) {
+    const current = state.room.videos.find(v => v.votes.includes(userId));
+    return current && current.id === videoId;
+}
+
+function applyVote(userId, videoId, unvote) {
+    state.room.videos.forEach(v => {
+        v.votes = v.votes.filter(uid => uid !== userId);
+    });
+    if (!unvote) {
+        const video = state.room.videos.find(v => v.id === videoId);
+        if (video) video.votes.push(userId);
+    }
+}
+
 function voteForVideo(videoId) {
     if (state.room.phase !== 'voting') return;
+    const unvoting = isUnvote(state.userId, videoId);
 
     if (state.isHost) {
-        const currentVote = state.room.videos.find(v =>
-            v.votes.includes(state.userId)
-        );
-        const isUnvote = currentVote && currentVote.id === videoId;
-
-        state.room.videos.forEach(v => {
-            v.votes = v.votes.filter(uid => uid !== state.userId);
-        });
-
-        if (!isUnvote) {
-            const video = state.room.videos.find(v => v.id === videoId);
-            if (video) video.votes.push(state.userId);
-        }
+        applyVote(state.userId, videoId, unvoting);
         broadcastState();
         render();
     } else if (state.hostConn) {
-        const currentVote = state.room.videos.find(v =>
-            v.votes.includes(state.userId)
-        );
-        const isUnvote = currentVote && currentVote.id === videoId;
         state.hostConn.send({
             type: 'vote',
             videoId,
             userId: state.userId,
-            unvote: isUnvote,
+            unvote: unvoting,
         });
     }
 }
@@ -578,7 +556,7 @@ function renderPlayAgainModal() {
     if (!state.showPlayAgainModal) return '';
     return `
         <div class="modal-overlay">
-            <div class="modal fade-in">
+            <div class="modal">
                 <h2>Jugar de nuevo</h2>
                 <p>Elegí la temática para la nueva ronda</p>
                 <form id="play-again-form" class="form-group">
@@ -591,20 +569,12 @@ function renderPlayAgainModal() {
     `;
 }
 
-// --- Rendering ---
+let lastView = null;
 function render() {
     const app = document.getElementById('app');
 
-    // Show username modal if needed
-    if (!state.username) {
-        app.innerHTML = renderUsernameModal();
-        const input = app.querySelector('input');
-        if (input) input.focus();
-        return;
-    }
-
-    // Show creating username for pending actions
-    if (state.pendingCreate) {
+    // Deferred room creation after username is set
+    if (state.username && state.pendingCreate) {
         const name = state.pendingCreate;
         const topic = state.pendingTopic || '';
         state.pendingCreate = null;
@@ -613,23 +583,36 @@ function render() {
         return;
     }
 
-    switch (state.view) {
-        case 'loading':
-            app.innerHTML = renderLoading();
-            break;
-        case 'room':
-            app.innerHTML = renderRoom();
-            break;
-        default:
-            app.innerHTML = renderHome();
-            break;
+    const currentView = !state.username ? 'username' : state.view;
+    let html;
+    if (!state.username) {
+        html = renderUsernameModal();
+    } else {
+        switch (state.view) {
+            case 'loading': html = renderLoading(); break;
+            case 'room':    html = renderRoom(); break;
+            default:        html = renderHome(); break;
+        }
+    }
+
+    morphdom(app, `<div id="app">${html}</div>`);
+
+    // Fade in only on view transitions
+    if (currentView !== lastView) {
+        app.firstElementChild?.classList.add('fade-in');
+        lastView = currentView;
+    }
+
+    if (!state.username) {
+        const input = app.querySelector('input');
+        if (input && document.activeElement !== input) input.focus();
     }
 }
 
 function renderUsernameModal() {
     return `
         <div class="modal-overlay">
-            <div class="modal fade-in">
+            <div class="modal">
                 <h2>Nombre Pendiente</h2>
                 <p>Elegí tu nombre</p>
                 <form id="username-form" class="form-group">
@@ -643,7 +626,7 @@ function renderUsernameModal() {
 
 function renderHome() {
     return `
-        <div class="container fade-in">
+        <div class="container">
             <header class="hero">
                 <h1>Nombre Pendiente</h1>
                 <p class="subtitle">Agregá videos, votá y elegí al ganador</p>
@@ -677,7 +660,7 @@ function renderHome() {
 function renderLoading() {
     return `
         <div class="container">
-            <div class="loading-view fade-in">
+            <div class="loading-view">
                 <div class="spinner"></div>
                 <p>Conectando...</p>
             </div>
@@ -721,7 +704,7 @@ function renderRoom() {
     }).join('');
 
     return `
-        <div class="container fade-in">
+        <div class="container">
             <div class="room-header">
                 <div class="share-row">
                     <input type="text" value="${escapeHtml(shareUrl)}" readonly id="share-url">
@@ -734,7 +717,7 @@ function renderRoom() {
                 </div>
                 ${users.length > 0 ? `<div class="users-list" style="margin-top:12px">${userTags}</div>` : ''}
             </div>
-            ${state.reconnecting ? `<div class="reconnect-banner">Reconectando... (intento ${state.reconnectAttempts}/3)</div>` : ''}
+            ${state.reconnectAttempts > 0 ? `<div class="reconnect-banner">Reconectando... (intento ${state.reconnectAttempts}/3)</div>` : ''}
             ${state.room.topic ? `<div class="topic-banner">${escapeHtml(state.room.topic)}</div>` : ''}
             ${content}
             <div style="text-align:center; padding-top:16px;">
@@ -880,12 +863,11 @@ function renderVideoCard(video, phase) {
             <button class="vote-btn ${hasVoted ? 'voted' : ''}" data-action="vote" data-video-id="${escapeHtml(video.id)}">
                 ${hasVoted ? '&#9829;' : '&#9825;'} Votar
             </button>
-            <span class="vote-count">${video.votes.length} voto${video.votes.length !== 1 ? 's' : ''}</span>
         </div>
     ` : '';
 
     const removeBtn = (phase === 'adding' && state.isHost) ? `
-        <button class="btn btn-small btn-icon" data-action="remove-video" data-video-id="${escapeHtml(video.id)}"
+        <button class="btn btn-small" data-action="remove-video" data-video-id="${escapeHtml(video.id)}"
                 style="position:absolute;top:8px;right:8px;background:rgba(0,0,0,0.7);border:none;color:var(--error);font-size:1rem;"
                 title="Eliminar">&times;</button>
     ` : '';
@@ -924,7 +906,6 @@ function renderPreviewModal() {
     `;
 }
 
-// --- Helpers ---
 function sanitizeRoomName(name) {
     return name
         .toLowerCase()
@@ -965,5 +946,4 @@ function showToast(message, type = '') {
     }, 3000);
 }
 
-// --- Start ---
 init();

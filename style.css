@@ -1,7 +1,4 @@
-/* ========================================
-   Playlist Battle - Styles
-   Flat / Solid Purple-Yellow-Black
-   ======================================== */
+/* Nombre Pendiente - Styles */
 
 *, *::before, *::after {
     margin: 0;
@@ -225,14 +222,6 @@ input[readonly] {
 .btn-small {
     padding: 8px 16px;
     font-size: 0.85rem;
-}
-
-.btn-icon {
-    padding: 10px;
-    background: var(--surface);
-    border: none;
-    color: var(--text);
-    border-radius: var(--radius-sm);
 }
 
 .btn:disabled {
@@ -459,6 +448,7 @@ input[readonly] {
     border: 3px solid var(--yellow);
     border-radius: var(--radius);
     overflow: hidden;
+    animation: pulse-glow 3s ease-in-out infinite;
 }
 
 .winner-card .video-embed {
@@ -706,17 +696,11 @@ input[readonly] {
     border: 2px solid var(--success);
 }
 
-/* Winner card glow */
 @keyframes pulse-glow {
     0%, 100% { box-shadow: 0 0 20px rgba(250, 204, 21, 0.3); }
     50% { box-shadow: 0 0 40px rgba(250, 204, 21, 0.5); }
 }
 
-.winner-card {
-    animation: pulse-glow 3s ease-in-out infinite;
-}
-
-/* Top accent bar for winner */
 .winner-card::before {
     content: '';
     display: block;
