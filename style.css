@@ -32,6 +32,15 @@
     --shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
 }
 
+html, body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    height: 100%;
+    width: 100%;
+    overscroll-behavior: none;
+}
+
 html {
     font-size: 16px;
 }
@@ -40,19 +49,27 @@ body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background: var(--bg);
     color: var(--text);
-    min-height: 100vh;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
+}
+
+#app {
+    position: fixed;
+    inset: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: none;
 }
 
 /* Layout */
 .container {
     max-width: 900px;
     margin: 0 auto;
-    padding: 24px 20px;
-    padding-left: max(20px, env(safe-area-inset-left));
-    padding-right: max(20px, env(safe-area-inset-right));
-    padding-top: max(24px, env(safe-area-inset-top));
+    padding: max(24px, env(safe-area-inset-top, 0px))
+             max(20px, env(safe-area-inset-right, 0px))
+             max(24px, env(safe-area-inset-bottom, 0px))
+             max(20px, env(safe-area-inset-left, 0px));
 }
 
 /* Typography */
@@ -150,7 +167,7 @@ input[type="search"] {
     border: 2px solid var(--border-light);
     border-radius: var(--radius-sm);
     color: var(--text);
-    font-size: 0.95rem;
+    font-size: 16px;
     font-family: inherit;
     outline: none;
     transition: border-color 0.2s;
@@ -254,8 +271,11 @@ input[readonly] {
 
 .share-row input {
     flex: 1;
-    font-size: 0.85rem;
+    min-width: 0;
+    font-size: 16px;
     padding: 8px 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .room-meta {
@@ -561,8 +581,6 @@ input[readonly] {
     justify-content: center;
     z-index: 100;
     padding: 20px;
-    padding-left: max(20px, env(safe-area-inset-left));
-    padding-right: max(20px, env(safe-area-inset-right));
 }
 
 .modal {
@@ -594,7 +612,7 @@ input[readonly] {
 /* Toast */
 .toast {
     position: fixed;
-    bottom: max(24px, env(safe-area-inset-bottom));
+    bottom: max(24px, env(safe-area-inset-bottom, 0px));
     left: 50%;
     transform: translateX(-50%) translateY(100px);
     padding: 12px 24px;
@@ -716,10 +734,10 @@ input[readonly] {
 /* Responsive */
 @media (max-width: 500px) {
     .container {
-        padding: 16px 12px;
-        padding-left: max(12px, env(safe-area-inset-left));
-        padding-right: max(12px, env(safe-area-inset-right));
-        padding-top: max(16px, env(safe-area-inset-top));
+        padding: max(16px, env(safe-area-inset-top, 0px))
+                 max(12px, env(safe-area-inset-right, 0px))
+                 max(16px, env(safe-area-inset-bottom, 0px))
+                 max(12px, env(safe-area-inset-left, 0px));
     }
 
     h1 {
@@ -743,7 +761,8 @@ input[readonly] {
     }
 
     .share-row {
-        flex-direction: column;
+        flex-direction: row;
+        align-items: center;
     }
 
     .video-grid {
@@ -761,9 +780,10 @@ input[readonly] {
 
 @media (max-width: 390px) {
     .container {
-        padding: 12px 10px;
-        padding-left: max(10px, env(safe-area-inset-left));
-        padding-right: max(10px, env(safe-area-inset-right));
+        padding: max(12px, env(safe-area-inset-top, 0px))
+                 max(10px, env(safe-area-inset-right, 0px))
+                 max(12px, env(safe-area-inset-bottom, 0px))
+                 max(10px, env(safe-area-inset-left, 0px));
     }
 
     .hero h1 {
@@ -784,8 +804,6 @@ input[readonly] {
 
     .modal-overlay {
         padding: 16px;
-        padding-left: max(16px, env(safe-area-inset-left));
-        padding-right: max(16px, env(safe-area-inset-right));
     }
 
     .btn {
