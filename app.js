@@ -22,6 +22,9 @@ const state = {
         topic: '',
     },
     previewVideoId: null,
+    showPlayAgainModal: false,
+    reconnectAttempts: 0,
+    reconnecting: false,
     connecting: false,
     view: 'home',      // 'home', 'room', 'loading'
 };
@@ -38,6 +41,10 @@ function init() {
     setupEventListeners();
     checkRoute();
     window.addEventListener('hashchange', checkRoute);
+
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('sw.js');
+    }
 }
 
 function checkRoute() {
@@ -62,6 +69,8 @@ function checkRoute() {
         state.isHost = false;
         state.connections = [];
         state.hostConn = null;
+        state.reconnecting = false;
+        state.reconnectAttempts = 0;
         state.room = { phase: 'adding', videos: [], users: [], topic: '' };
         render();
     }
@@ -111,6 +120,12 @@ function setupEventListeners() {
             window.location.hash = '#/room/' + encodeURIComponent(name);
         }
 
+        if (form.id === 'play-again-form') {
+            const input = form.querySelector('input[name="play-again-topic"]');
+            const topic = input ? input.value.trim() : '';
+            confirmPlayAgain(topic);
+        }
+
         if (form.id === 'video-form') {
             const input = form.querySelector('input');
             const query = input.value.trim();
@@ -151,6 +166,9 @@ function setupEventListeners() {
                 break;
             case 'go-home':
                 window.location.hash = '';
+                break;
+            case 'cancel-play-again':
+                cancelPlayAgain();
                 break;
         }
     });
@@ -226,10 +244,17 @@ function joinRoom(roomName) {
         return;
     }
 
-    state.view = 'loading';
-    state.connecting = true;
+    if (!state.reconnecting) {
+        state.view = 'loading';
+        state.connecting = true;
+    }
     state.roomName = roomName;
     render();
+
+    if (state.peer) {
+        state.peer.destroy();
+        state.peer = null;
+    }
 
     const peer = new Peer();
 
@@ -242,6 +267,8 @@ function joinRoom(roomName) {
             state.hostConn = conn;
             state.isHost = false;
             state.connecting = false;
+            state.reconnectAttempts = 0;
+            state.reconnecting = false;
             state.view = 'room';
             conn.send({ type: 'join', userId: state.userId, username: state.username });
             render();
@@ -253,20 +280,36 @@ function joinRoom(roomName) {
 
         conn.on('close', () => {
             state.hostConn = null;
-            showToast('Se perdió la conexión con la sala', 'error');
-            state.view = 'home';
-            state.roomName = '';
-            window.location.hash = '';
-            render();
+            if (state.reconnectAttempts < 3) {
+                state.reconnecting = true;
+                state.reconnectAttempts++;
+                showToast(`Reconectando... (intento ${state.reconnectAttempts}/3)`, 'error');
+                render();
+                setTimeout(() => joinRoom(roomName), 2000);
+            } else {
+                state.reconnecting = false;
+                state.reconnectAttempts = 0;
+                showToast('Se perdió la conexión con la sala', 'error');
+                state.view = 'home';
+                state.roomName = '';
+                window.location.hash = '';
+                render();
+            }
         });
 
         conn.on('error', (err) => {
-            showToast('Error de conexión: ' + err, 'error');
+            if (!state.reconnecting) {
+                showToast('Error de conexión: ' + err, 'error');
+            }
         });
     });
 
     peer.on('error', (err) => {
         state.connecting = false;
+        if (state.reconnecting) {
+            // Let retry continue
+            return;
+        }
         if (err.type === 'peer-unavailable') {
             showToast('La sala no existe o el host se desconectó', 'error');
         } else {
@@ -292,11 +335,17 @@ function handleNewConnection(conn) {
 
     conn.on('close', () => {
         state.connections = state.connections.filter(c => c !== conn);
-        // Remove user associated with this connection
+        // Delayed removal: wait 15s for reconnection before removing user
         if (conn._userId) {
-            state.room.users = state.room.users.filter(u => u.id !== conn._userId);
-            broadcastState();
-            render();
+            const disconnectedUserId = conn._userId;
+            setTimeout(() => {
+                const hasActiveConn = state.connections.some(c => c._userId === disconnectedUserId && c.open);
+                if (!hasActiveConn) {
+                    state.room.users = state.room.users.filter(u => u.id !== disconnectedUserId);
+                    broadcastState();
+                    render();
+                }
+            }, 15000);
         }
     });
 }
@@ -507,12 +556,39 @@ function nextPhase() {
 
 function playAgain() {
     if (!state.isHost) return;
-    const newTopic = prompt('Temática (dejar vacío para tema libre)') || '';
+    state.showPlayAgainModal = true;
+    render();
+}
+
+function confirmPlayAgain(topic) {
+    state.showPlayAgainModal = false;
     state.room.phase = 'adding';
     state.room.videos = [];
-    state.room.topic = newTopic.trim();
+    state.room.topic = (topic || '').trim();
     broadcastState();
     render();
+}
+
+function cancelPlayAgain() {
+    state.showPlayAgainModal = false;
+    render();
+}
+
+function renderPlayAgainModal() {
+    if (!state.showPlayAgainModal) return '';
+    return `
+        <div class="modal-overlay">
+            <div class="modal fade-in">
+                <h2>Jugar de nuevo</h2>
+                <p>Elegí la temática para la nueva ronda</p>
+                <form id="play-again-form" class="form-group">
+                    <input type="text" name="play-again-topic" placeholder="Temática (opcional)" maxlength="60">
+                    <button type="submit" class="btn btn-primary">Comenzar</button>
+                    <button type="button" class="btn btn-secondary" data-action="cancel-play-again">Cancelar</button>
+                </form>
+            </div>
+        </div>
+    `;
 }
 
 // --- Rendering ---
@@ -632,9 +708,17 @@ function renderRoom() {
 
     const shareUrl = window.location.origin + window.location.pathname + '#/room/' + encodeURIComponent(state.roomName);
 
-    const userTags = users.map(u =>
-        `<span class="user-tag ${u.id === state.userId ? 'you' : ''}">${escapeHtml(u.name)}${u.id === state.userId ? ' (vos)' : ''}</span>`
-    ).join('');
+    const votedUserIds = (phase === 'voting' || phase === 'results')
+        ? new Set(videos.flatMap(v => v.votes))
+        : new Set();
+
+    const userTags = users.map(u => {
+        const isYou = u.id === state.userId;
+        const hasVoted = votedUserIds.has(u.id);
+        const classes = ['user-tag', isYou ? 'you' : '', hasVoted ? 'voted' : ''].filter(Boolean).join(' ');
+        const label = escapeHtml(u.name) + (isYou ? ' (vos)' : '') + (hasVoted ? ' ✓' : '');
+        return `<span class="${classes}">${label}</span>`;
+    }).join('');
 
     return `
         <div class="container fade-in">
@@ -650,6 +734,7 @@ function renderRoom() {
                 </div>
                 ${users.length > 0 ? `<div class="users-list" style="margin-top:12px">${userTags}</div>` : ''}
             </div>
+            ${state.reconnecting ? `<div class="reconnect-banner">Reconectando... (intento ${state.reconnectAttempts}/3)</div>` : ''}
             ${state.room.topic ? `<div class="topic-banner">${escapeHtml(state.room.topic)}</div>` : ''}
             ${content}
             <div style="text-align:center; padding-top:16px;">
@@ -657,6 +742,7 @@ function renderRoom() {
             </div>
         </div>
         ${renderPreviewModal()}
+        ${renderPlayAgainModal()}
     `;
 }
 
