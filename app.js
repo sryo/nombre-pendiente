@@ -15,6 +15,7 @@ const state = {
         videos: [],
         users: [],
         topic: '',
+        currentVideoIndex: 0,
     },
     previewVideoId: null,
     showPlayAgainModal: false,
@@ -66,7 +67,7 @@ function checkRoute() {
         state.connections = [];
         state.hostConn = null;
         state.reconnectAttempts = 0;
-        state.room = { phase: 'adding', videos: [], users: [], topic: '' };
+        state.room = { phase: 'adding', videos: [], users: [], topic: '', currentVideoIndex: 0 };
         render();
     }
 }
@@ -158,6 +159,15 @@ function setupEventListeners() {
                 state.previewVideoId = null;
                 render();
                 break;
+            case 'prev-video':
+                navigateVideo(-1);
+                break;
+            case 'next-video':
+                navigateVideo(1);
+                break;
+            case 'goto-video':
+                navigateVideo(0, parseInt(btn.dataset.index, 10));
+                break;
             case 'go-home':
                 window.location.hash = '';
                 break;
@@ -199,6 +209,7 @@ function createRoom(roomName, topic) {
             videos: [],
             users: [{ id: state.userId, name: state.username }],
             topic: topic || '',
+            currentVideoIndex: 0,
         };
         window.location.hash = '#/room/' + encodeURIComponent(roomName);
         state.view = 'room';
@@ -516,6 +527,17 @@ function removeVideo(videoId) {
     render();
 }
 
+function navigateVideo(delta, absoluteIndex) {
+    if (!state.isHost) return;
+    const videos = state.room.videos;
+    if (videos.length === 0) return;
+    let idx = absoluteIndex !== undefined ? absoluteIndex : state.room.currentVideoIndex + delta;
+    idx = Math.max(0, Math.min(idx, videos.length - 1));
+    state.room.currentVideoIndex = idx;
+    broadcastState();
+    render();
+}
+
 function nextPhase() {
     if (!state.isHost) return;
     if (state.room.phase === 'adding') {
@@ -524,6 +546,7 @@ function nextPhase() {
             return;
         }
         state.room.phase = 'voting';
+        state.room.currentVideoIndex = 0;
     } else if (state.room.phase === 'voting') {
         state.room.phase = 'results';
     }
@@ -543,6 +566,7 @@ function confirmPlayAgain(topic) {
     state.room.phase = 'adding';
     state.room.videos = [];
     state.room.topic = (topic || '').trim();
+    state.room.currentVideoIndex = 0;
     broadcastState();
     render();
 }
@@ -735,7 +759,7 @@ function renderAddingPhase() {
 
     const videosHtml = videos.length === 0
         ? '<div class="empty-state"><p>Pegá un link de YouTube</p></div>'
-        : `<div class="video-grid">${videos.map(v => renderVideoCard(v, 'adding')).join('')}</div>`;
+        : `<div class="video-grid">${videos.map(v => renderVideoCard(v)).join('')}</div>`;
 
     const formHtml = hasAdded
         ? `<div class="added-message">Ya agregaste tu video</div>`
@@ -763,18 +787,66 @@ function renderAddingPhase() {
 }
 
 function renderVotingPhase() {
-    const { videos } = state.room;
+    const { videos, currentVideoIndex } = state.room;
 
-    const videosHtml = videos.length === 0
-        ? '<div class="empty-state"><p>No hay videos.</p></div>'
-        : `<div class="video-grid">${videos.map(v => renderVideoCard(v, 'voting')).join('')}</div>`;
+    if (videos.length === 0) {
+        return '<div class="empty-state"><p>No hay videos.</p></div>';
+    }
+
+    const idx = Math.max(0, Math.min(currentVideoIndex || 0, videos.length - 1));
+    const current = videos[idx];
+    const userVotedId = videos.find(v => v.votes.includes(state.userId))?.id;
+    const showNav = videos.length > 1;
+    const isFirst = idx === 0;
+    const isLast = idx === videos.length - 1;
+
+    const embedHtml = `
+        <div class="voting-player-embed">
+            <iframe
+                src="https://www.youtube.com/embed/${escapeHtml(current.id)}?autoplay=0"
+                allow="encrypted-media"
+                allowfullscreen>
+            </iframe>
+        </div>`;
+
+    const controlsHtml = `
+        <div class="voting-player-controls">
+            <div class="voting-player-info">
+                <h3>${escapeHtml(current.title)}</h3>
+                <span class="voting-player-counter">${idx + 1} / ${videos.length}</span>
+            </div>
+            ${showNav && state.isHost ? `
+                <div class="voting-player-actions">
+                    <div class="voting-nav">
+                        <button class="voting-nav-btn" data-action="prev-video" ${isFirst ? 'disabled' : ''}>&lsaquo;</button>
+                        <button class="voting-nav-btn" data-action="next-video" ${isLast ? 'disabled' : ''}>&rsaquo;</button>
+                    </div>
+                </div>
+            ` : ''}
+        </div>`;
+
+    const playlistHtml = `
+        <div class="voting-playlist">
+            ${videos.map((v, i) => {
+                const isCurrent = i === idx;
+                const isVoted = v.id === userVotedId;
+                return `
+                    <div class="voting-playlist-item ${isCurrent ? 'current' : ''}">
+                        <span class="voting-playlist-rank ${isCurrent ? 'active' : ''}" ${state.isHost ? `data-action="goto-video" data-index="${i}" style="cursor:pointer"` : ''}>${i + 1}</span>
+                        <img src="${escapeHtml(v.thumbnail)}" alt="" ${state.isHost ? `data-action="goto-video" data-index="${i}" style="cursor:pointer"` : ''}>
+                        <span class="voting-playlist-title" ${state.isHost ? `data-action="goto-video" data-index="${i}" style="cursor:pointer"` : ''}>${escapeHtml(v.title)}</span>
+                        <button class="vote-btn vote-btn-playlist ${isVoted ? 'voted' : ''}" data-action="vote" data-video-id="${escapeHtml(v.id)}">
+                            ${isVoted ? '&#9829;' : '&#9825;'}
+                        </button>
+                    </div>`;
+            }).join('')}
+        </div>`;
 
     return `
-        <div class="section">
-            <div class="section-header">
-                <h2>Votá por tu favorito</h2>
-            </div>
-            ${videosHtml}
+        <div class="voting-player">
+            ${embedHtml}
+            ${controlsHtml}
+            ${playlistHtml}
         </div>
         ${state.isHost ? `
             <div class="host-controls">
@@ -796,22 +868,27 @@ function renderResultsPhase() {
     const winners = sorted.filter(v => v.votes.length === maxVotes && maxVotes > 0);
     const winner = winners[0];
 
+    const isTie = winners.length > 1;
+
     const winnerHtml = winner ? `
         <div class="winner-section">
-            <div class="winner-label">Ganador${winners.length > 1 ? 'es' : ''}</div>
-            <div class="winner-card">
-                <div class="video-embed">
-                    <iframe
-                        src="https://www.youtube.com/embed/${escapeHtml(winner.id)}?autoplay=1"
-                        allow="autoplay; encrypted-media"
-                        allowfullscreen>
-                    </iframe>
+            <div class="winner-label">${isTie ? 'Empate' : 'Ganador'}</div>
+            ${isTie ? `<div class="tie-subtitle">${winners.length} videos empataron con ${maxVotes} voto${maxVotes !== 1 ? 's' : ''}</div>` : ''}
+            ${winners.map((w, i) => `
+                <div class="winner-card ${isTie ? 'tie' : ''}">
+                    <div class="video-embed">
+                        <iframe
+                            src="https://www.youtube.com/embed/${escapeHtml(w.id)}?autoplay=${i === 0 ? '1' : '0'}"
+                            allow="autoplay; encrypted-media"
+                            allowfullscreen>
+                        </iframe>
+                    </div>
+                    <div class="winner-info">
+                        <h3>${escapeHtml(w.title)}</h3>
+                        <div class="winner-votes">${w.votes.length} voto${w.votes.length !== 1 ? 's' : ''}</div>
+                    </div>
                 </div>
-                <div class="winner-info">
-                    <h3>${escapeHtml(winner.title)}</h3>
-                    <div class="winner-votes">${winner.votes.length} voto${winner.votes.length !== 1 ? 's' : ''}</div>
-                </div>
-            </div>
+            `).join('')}
         </div>
     ` : `
         <div class="winner-section">
@@ -855,18 +932,8 @@ function renderResultsPhase() {
     `;
 }
 
-function renderVideoCard(video, phase) {
-    const hasVoted = video.votes.includes(state.userId);
-
-    const voteSection = phase === 'voting' ? `
-        <div class="vote-section">
-            <button class="vote-btn ${hasVoted ? 'voted' : ''}" data-action="vote" data-video-id="${escapeHtml(video.id)}">
-                ${hasVoted ? '&#9829;' : '&#9825;'} Votar
-            </button>
-        </div>
-    ` : '';
-
-    const removeBtn = (phase === 'adding' && state.isHost) ? `
+function renderVideoCard(video) {
+    const removeBtn = state.isHost ? `
         <button class="btn btn-small" data-action="remove-video" data-video-id="${escapeHtml(video.id)}"
                 style="position:absolute;top:8px;right:8px;background:rgba(0,0,0,0.7);border:none;color:var(--error);font-size:1rem;"
                 title="Eliminar">&times;</button>
@@ -881,9 +948,7 @@ function renderVideoCard(video, phase) {
             </div>
             <div class="video-info">
                 <div class="video-title">${escapeHtml(video.title)}</div>
-                <div class="video-author">${state.room.phase === 'results' ? escapeHtml(video.addedBy) : ''}</div>
             </div>
-            ${voteSection}
         </div>
     `;
 }
