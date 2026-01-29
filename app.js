@@ -167,7 +167,7 @@ function setupEventListeners() {
 function createRoom(roomName, topic) {
     const sanitized = sanitizeRoomName(roomName);
     if (!sanitized) {
-        showToast('Nombre de sala no valido', 'error');
+        showToast('Nombre de sala no válido', 'error');
         return;
     }
 
@@ -202,10 +202,10 @@ function createRoom(roomName, topic) {
     peer.on('error', (err) => {
         state.connecting = false;
         if (err.type === 'unavailable-id') {
-            showToast('Esa sala ya existe. Intenta unirte o usa otro nombre.', 'error');
+            showToast('Esa sala ya existe. Intentá unirte o usá otro nombre.', 'error');
             state.view = 'home';
         } else {
-            showToast('Error al crear la sala: ' + err.type, 'error');
+            showToast('Error al crear sala: ' + err.type, 'error');
             state.view = 'home';
         }
         render();
@@ -222,7 +222,7 @@ function createRoom(roomName, topic) {
 function joinRoom(roomName) {
     const sanitized = sanitizeRoomName(roomName);
     if (!sanitized) {
-        showToast('Nombre de sala no valido', 'error');
+        showToast('Nombre de sala no válido', 'error');
         return;
     }
 
@@ -253,7 +253,7 @@ function joinRoom(roomName) {
 
         conn.on('close', () => {
             state.hostConn = null;
-            showToast('Se perdio la conexion con la sala', 'error');
+            showToast('Se perdió la conexión con la sala', 'error');
             state.view = 'home';
             state.roomName = '';
             window.location.hash = '';
@@ -261,14 +261,14 @@ function joinRoom(roomName) {
         });
 
         conn.on('error', (err) => {
-            showToast('Error de conexion: ' + err, 'error');
+            showToast('Error de conexión: ' + err, 'error');
         });
     });
 
     peer.on('error', (err) => {
         state.connecting = false;
         if (err.type === 'peer-unavailable') {
-            showToast('La sala no existe o el host se desconecto', 'error');
+            showToast('La sala no existe o el host se desconectó', 'error');
         } else {
             showToast('Error al conectar: ' + err.type, 'error');
         }
@@ -312,19 +312,19 @@ function handleGuestAction(conn, data) {
             } else {
                 exists.name = data.username;
             }
-            showToast(data.username + ' se unio a la sala', 'success');
+            showToast(data.username + ' se unió', 'success');
             break;
         }
         case 'add-video': {
             if (state.room.phase !== 'adding') return;
             const alreadyAdded = state.room.videos.find(v => v.addedBy === data.video.addedBy);
             if (alreadyAdded) {
-                conn.send({ type: 'error', message: 'Ya agregaste tu video para esta ronda' });
+                conn.send({ type: 'error', message: 'Ya agregaste tu video' });
                 return;
             }
             const dup = state.room.videos.find(v => v.id === data.video.id);
             if (dup) {
-                conn.send({ type: 'error', message: 'Ese video ya esta en la playlist' });
+                conn.send({ type: 'error', message: 'Ese video ya está en la playlist' });
                 return;
             }
             state.room.videos.push(data.video);
@@ -410,20 +410,20 @@ async function fetchVideoInfo(videoId) {
 async function handleVideoInput(query) {
     const alreadyAdded = state.room.videos.find(v => v.addedBy === state.username);
     if (alreadyAdded) {
-        showToast('Ya agregaste tu video para esta ronda', 'error');
+        showToast('Ya agregaste tu video', 'error');
         return;
     }
     const videoId = extractVideoId(query);
     if (!videoId) {
-        showToast('Pega un link de YouTube valido', 'error');
+        showToast('Pegá un link de YouTube válido', 'error');
         return;
     }
     const dup = state.room.videos.find(v => v.id === videoId);
     if (dup) {
-        showToast('Ese video ya esta en la playlist', 'error');
+        showToast('Ese video ya está en la playlist', 'error');
         return;
     }
-    showToast('Agregando video...', 'success');
+    showToast('Agregando...', 'success');
     const info = await fetchVideoInfo(videoId);
     addVideoToRoom({
         ...info,
@@ -438,7 +438,7 @@ function addVideoToRoom(video) {
     if (state.isHost) {
         const dup = state.room.videos.find(v => v.id === video.id);
         if (dup) {
-            showToast('Ese video ya esta en la playlist', 'error');
+            showToast('Ese video ya está en la playlist', 'error');
             return;
         }
         state.room.videos.push(video);
@@ -493,7 +493,7 @@ function nextPhase() {
     if (!state.isHost) return;
     if (state.room.phase === 'adding') {
         if (state.room.videos.length === 0) {
-            showToast('Agrega al menos un video antes de votar', 'error');
+            showToast('Agregá al menos un video', 'error');
             return;
         }
         state.room.phase = 'voting';
@@ -507,7 +507,7 @@ function nextPhase() {
 
 function playAgain() {
     if (!state.isHost) return;
-    const newTopic = prompt('Tematica para la nueva ronda (dejar vacio para tema libre):') || '';
+    const newTopic = prompt('Temática (dejar vacío para tema libre)') || '';
     state.room.phase = 'adding';
     state.room.videos = [];
     state.room.topic = newTopic.trim();
@@ -555,7 +555,7 @@ function renderUsernameModal() {
         <div class="modal-overlay">
             <div class="modal fade-in">
                 <h2>Nombre Pendiente</h2>
-                <p>Elegi un nombre para jugar</p>
+                <p>Elegí tu nombre</p>
                 <form id="username-form" class="form-group">
                     <input type="text" placeholder="Tu nombre" maxlength="20" required>
                     <button type="submit" class="btn btn-primary">Entrar</button>
@@ -570,24 +570,24 @@ function renderHome() {
         <div class="container fade-in">
             <header class="hero">
                 <h1>Nombre Pendiente</h1>
-                <p class="subtitle">Crea una sala, agrega videos de YouTube y vota por tu favorito</p>
+                <p class="subtitle">Agregá videos, votá y elegí al ganador</p>
             </header>
             <div class="home-grid">
                 <div class="card">
-                    <h2>Crear Sala</h2>
-                    <p>Crea una sala nueva y compartila con tus amigos</p>
+                    <h2>Crear sala</h2>
+                    <p>Creá una sala y compartila</p>
                     <form id="create-form" class="form-group">
                         <input type="text" name="room-name" placeholder="Nombre de la sala" required maxlength="30">
-                        <input type="text" name="room-topic" placeholder="Tematica (opcional)" maxlength="60">
-                        <button type="submit" class="btn btn-primary">Crear Sala</button>
+                        <input type="text" name="room-topic" placeholder="Temática (opcional)" maxlength="60">
+                        <button type="submit" class="btn btn-primary">Crear sala</button>
                     </form>
                 </div>
                 <div class="card">
                     <h2>Unirse</h2>
-                    <p>Ingresa el nombre de una sala para unirte</p>
+                    <p>Entrá a la sala de un amigo</p>
                     <form id="join-form" class="form-group">
                         <input type="text" placeholder="Nombre de la sala" required maxlength="30">
-                        <button type="submit" class="btn btn-secondary">Unirse</button>
+                        <button type="submit" class="btn btn-secondary">Entrar</button>
                     </form>
                 </div>
             </div>
@@ -603,7 +603,7 @@ function renderLoading() {
         <div class="container">
             <div class="loading-view fade-in">
                 <div class="spinner"></div>
-                <p>Conectando a la sala...</p>
+                <p>Conectando...</p>
             </div>
         </div>
     `;
@@ -612,8 +612,8 @@ function renderLoading() {
 function renderRoom() {
     const { phase, videos, users } = state.room;
     const phaseLabels = {
-        adding: 'Agregando videos',
-        voting: 'Votacion',
+        adding: 'Agregando',
+        voting: 'Votación',
         results: 'Resultados',
     };
 
@@ -653,7 +653,7 @@ function renderRoom() {
             ${state.room.topic ? `<div class="topic-banner">${escapeHtml(state.room.topic)}</div>` : ''}
             ${content}
             <div style="text-align:center; padding-top:16px;">
-                <button class="btn btn-small btn-secondary" data-action="go-home">Salir de la sala</button>
+                <button class="btn btn-small btn-secondary" data-action="go-home">Salir</button>
             </div>
         </div>
         ${renderPreviewModal()}
@@ -665,13 +665,13 @@ function renderAddingPhase() {
     const hasAdded = videos.some(v => v.addedBy === state.username);
 
     const videosHtml = videos.length === 0
-        ? '<div class="empty-state"><p>Pega un link de YouTube para agregar un video.</p></div>'
+        ? '<div class="empty-state"><p>Pegá un link de YouTube</p></div>'
         : `<div class="video-grid">${videos.map(v => renderVideoCard(v, 'adding')).join('')}</div>`;
 
     const formHtml = hasAdded
-        ? `<div class="added-message">Ya agregaste tu video para esta ronda</div>`
+        ? `<div class="added-message">Ya agregaste tu video</div>`
         : `<form id="video-form" class="search-form">
-                <input type="text" placeholder="Pegar link de YouTube" required>
+                <input type="text" placeholder="Link de YouTube" required>
                 <button type="submit" class="btn btn-primary">Agregar</button>
             </form>`;
 
@@ -687,7 +687,7 @@ function renderAddingPhase() {
         </div>
         ${state.isHost ? `
             <div class="host-controls">
-                <button class="btn btn-accent" data-action="next-phase">Comenzar Votacion</button>
+                <button class="btn btn-accent" data-action="next-phase">Comenzar votación</button>
             </div>
         ` : ''}
     `;
@@ -697,19 +697,19 @@ function renderVotingPhase() {
     const { videos } = state.room;
 
     const videosHtml = videos.length === 0
-        ? '<div class="empty-state"><p>No hay videos para votar.</p></div>'
+        ? '<div class="empty-state"><p>No hay videos.</p></div>'
         : `<div class="video-grid">${videos.map(v => renderVideoCard(v, 'voting')).join('')}</div>`;
 
     return `
         <div class="section">
             <div class="section-header">
-                <h2>Vota por tu favorito</h2>
+                <h2>Votá por tu favorito</h2>
             </div>
             ${videosHtml}
         </div>
         ${state.isHost ? `
             <div class="host-controls">
-                <button class="btn btn-accent" data-action="next-phase">Ver Resultados</button>
+                <button class="btn btn-accent" data-action="next-phase">Ver resultados</button>
             </div>
         ` : ''}
     `;
@@ -747,14 +747,14 @@ function renderResultsPhase() {
     ` : `
         <div class="winner-section">
             <div class="winner-label">Sin votos</div>
-            <p style="color:var(--text-secondary)">Nadie voto.</p>
+            <p style="color:var(--text-secondary)">Nadie votó.</p>
         </div>
     `;
 
     const restHtml = sorted.length > 1 ? `
         <div class="section">
             <div class="section-header">
-                <h2>Ranking completo</h2>
+                <h2>Ranking</h2>
             </div>
             <div class="results-list">
                 ${sorted.map((v, i) => {
@@ -780,7 +780,7 @@ function renderResultsPhase() {
         ${restHtml}
         ${state.isHost ? `
             <div class="host-controls">
-                <button class="btn btn-accent" data-action="play-again">Jugar de Nuevo</button>
+                <button class="btn btn-accent" data-action="play-again">Jugar de nuevo</button>
             </div>
         ` : ''}
     `;
