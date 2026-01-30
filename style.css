@@ -284,6 +284,27 @@ input[readonly] {
     cursor: not-allowed;
 }
 
+/* Home Actions */
+.home-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* Room Code */
+.room-code {
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 1.4rem;
+    font-weight: 800;
+    letter-spacing: 0.15em;
+    color: var(--yellow);
+    background: var(--surface);
+    padding: 6px 16px;
+    border-radius: var(--radius-sm);
+    border: 2px solid var(--border-light);
+    user-select: all;
+}
+
 /* Room Header */
 .room-header {
     padding-bottom: 24px;
@@ -302,15 +323,7 @@ input[readonly] {
     gap: 8px;
     align-items: center;
     margin-bottom: 16px;
-}
-
-.share-row input {
-    flex: 1;
-    min-width: 0;
-    font-size: 16px;
-    padding: 8px 12px;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    flex-wrap: wrap;
 }
 
 .room-meta {

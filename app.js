@@ -27,8 +27,7 @@ const state = {
     pendingTopic: null,
     pendingTransfer: null,   // { roomName, roomData } when being promoted to host
     view: 'home',      // 'home', 'room', 'loading'
-    homeRoomStatus: null,    // null | 'checking' | 'not-found'
-    homeInput: '',
+    homeMode: null,     // null | 'join' | 'topic'
     editingUsername: false,
 };
 
@@ -74,8 +73,7 @@ function checkRoute() {
         state.reconnectAttempts = 0;
         state.room = { phase: 'adding', videos: [], users: [], topic: '', currentVideoIndex: 0 };
         state.pendingTransfer = null;
-        state.homeRoomStatus = null;
-        state.homeInput = '';
+        state.homeMode = null;
         state.editingUsername = false;
         render();
     }
@@ -101,42 +99,30 @@ function setupEventListeners() {
             }
         }
 
-        if (form.id === 'smart-room-form') {
-            const nameInput = form.querySelector('input[name="room-name"]');
-            const name = nameInput.value.trim();
-            if (!name) return;
-
-            if (state.homeRoomStatus === null) {
-                state.homeInput = name;
-                state.homeRoomStatus = 'checking';
+        if (form.id === 'join-room-form') {
+            const input = form.querySelector('input[name="room-code"]');
+            const code = input.value.trim().toLowerCase();
+            if (!code) return;
+            state.homeMode = null;
+            if (!state.username) {
+                state.pendingRoom = code;
                 render();
-                checkRoomExists(name).then((exists) => {
-                    if (exists) {
-                        state.homeRoomStatus = null;
-                        state.homeInput = '';
-                        if (!state.username) {
-                            state.pendingRoom = name;
-                            render();
-                        } else {
-                            joinRoom(name);
-                        }
-                    } else {
-                        state.homeRoomStatus = 'not-found';
-                        render();
-                    }
-                });
-            } else if (state.homeRoomStatus === 'not-found') {
-                const topicInput = form.querySelector('input[name="room-topic"]');
-                const topic = topicInput ? topicInput.value.trim() : '';
-                state.homeRoomStatus = null;
-                state.homeInput = '';
-                if (!state.username) {
-                    state.pendingCreate = name;
-                    state.pendingTopic = topic;
-                    render();
-                } else {
-                    createRoom(name, topic);
-                }
+            } else {
+                joinRoom(code);
+            }
+        }
+
+        if (form.id === 'create-room-form') {
+            const topicInput = form.querySelector('input[name="room-topic"]');
+            const topic = topicInput ? topicInput.value.trim() : '';
+            const code = generateRoomCode();
+            state.homeMode = null;
+            if (!state.username) {
+                state.pendingCreate = code;
+                state.pendingTopic = topic;
+                render();
+            } else {
+                createRoom(code, topic);
             }
         }
 
@@ -171,6 +157,9 @@ function setupEventListeners() {
         const action = btn.dataset.action;
 
         switch (action) {
+            case 'copy-code':
+                copyRoomCode();
+                break;
             case 'copy-url':
                 copyShareUrl();
                 break;
@@ -206,9 +195,16 @@ function setupEventListeners() {
             case 'go-home':
                 window.location.hash = '';
                 break;
-            case 'home-reset':
-                state.homeRoomStatus = null;
-                state.homeInput = '';
+            case 'show-join':
+                state.homeMode = 'join';
+                render();
+                break;
+            case 'show-create':
+                state.homeMode = 'topic';
+                render();
+                break;
+            case 'home-back':
+                state.homeMode = null;
                 render();
                 break;
             case 'transfer-host':
@@ -243,19 +239,13 @@ function setupEventListeners() {
     });
 }
 
-function createRoom(roomName, topic) {
-    const sanitized = sanitizeRoomName(roomName);
-    if (!sanitized) {
-        showToast('Nombre de sala no válido', 'error');
-        return;
-    }
-
+function createRoom(code, topic) {
     state.view = 'loading';
     state.connecting = true;
-    state.roomName = roomName;
+    state.roomName = code;
     render();
 
-    const peerId = PEER_PREFIX + sanitized;
+    const peerId = PEER_PREFIX + code;
     const peer = new Peer(peerId);
 
     peer.on('open', () => {
@@ -269,7 +259,7 @@ function createRoom(roomName, topic) {
             topic: topic || '',
             currentVideoIndex: 0,
         };
-        window.location.hash = '#/room/' + encodeURIComponent(roomName);
+        window.location.hash = '#/room/' + encodeURIComponent(code);
         state.view = 'room';
         render();
         showToast('Sala creada', 'success');
@@ -282,7 +272,7 @@ function createRoom(roomName, topic) {
     peer.on('error', (err) => {
         state.connecting = false;
         if (err.type === 'unavailable-id') {
-            showToast('Esa sala ya existe. Intentá unirte o usá otro nombre.', 'error');
+            showToast('Código en uso, intentá de nuevo', 'error');
             state.view = 'home';
         } else {
             showToast('Error al crear sala: ' + err.type, 'error');
@@ -299,9 +289,9 @@ function createRoom(roomName, topic) {
 }
 
 function joinRoom(roomName) {
-    const sanitized = sanitizeRoomName(roomName);
-    if (!sanitized) {
-        showToast('Nombre de sala no válido', 'error');
+    const code = roomName.toLowerCase().trim();
+    if (!code) {
+        showToast('Código de sala no válido', 'error');
         return;
     }
 
@@ -309,7 +299,7 @@ function joinRoom(roomName) {
         state.view = 'loading';
         state.connecting = true;
     }
-    state.roomName = roomName;
+    state.roomName = code;
     render();
 
     if (state.peer) {
@@ -321,7 +311,7 @@ function joinRoom(roomName) {
 
     peer.on('open', () => {
         state.peer = peer;
-        const hostId = PEER_PREFIX + sanitized;
+        const hostId = PEER_PREFIX + code;
         const conn = peer.connect(hostId, { reliable: true });
 
         conn.on('open', () => {
@@ -824,35 +814,34 @@ function renderUsernameModal() {
 }
 
 function renderHome() {
-    const status = state.homeRoomStatus;
     let cardContent = '';
 
-    if (status === null) {
+    if (state.homeMode === null) {
         cardContent = `
             <h2>Ir a sala</h2>
-            <p>Buscá una sala o creá una nueva</p>
-            <form id="smart-room-form" class="form-group">
-                <input type="text" name="room-name" placeholder="Nombre de la sala" required maxlength="30" value="${escapeHtml(state.homeInput)}">
-                <button type="submit" class="btn btn-primary">Ir a sala</button>
-            </form>`;
-    } else if (status === 'checking') {
+            <p>Creá una sala o unite con un código</p>
+            <div class="home-actions">
+                <button class="btn btn-primary" data-action="show-create">Crear sala</button>
+                <button class="btn btn-secondary" data-action="show-join">Unirse a sala</button>
+            </div>`;
+    } else if (state.homeMode === 'join') {
         cardContent = `
-            <h2>Ir a sala</h2>
-            <p>Buscando sala...</p>
-            <form id="smart-room-form" class="form-group">
-                <input type="text" name="room-name" value="${escapeHtml(state.homeInput)}" readonly maxlength="30">
-                <button type="submit" class="btn btn-primary" disabled>Buscando...</button>
-            </form>`;
-    } else if (status === 'not-found') {
-        cardContent = `
-            <h2>Ir a sala</h2>
-            <p class="room-status">No se encontró la sala "${escapeHtml(state.homeInput)}"</p>
-            <form id="smart-room-form" class="form-group">
-                <input type="text" name="room-name" value="${escapeHtml(state.homeInput)}" readonly maxlength="30">
-                <input type="text" name="room-topic" placeholder="Consigna (opcional)" maxlength="60">
-                <button type="submit" class="btn btn-primary">Crear sala</button>
+            <h2>Unirse a sala</h2>
+            <p>Ingresá el código de la sala</p>
+            <form id="join-room-form" class="form-group">
+                <input type="text" name="room-code" placeholder="Código (ej: a3f7k2)" required maxlength="6" autocomplete="off" spellcheck="false">
+                <button type="submit" class="btn btn-primary">Unirse</button>
             </form>
-            <button class="btn-link" data-action="home-reset">Volver a buscar</button>`;
+            <button class="btn-link" data-action="home-back">Volver</button>`;
+    } else if (state.homeMode === 'topic') {
+        cardContent = `
+            <h2>Crear sala</h2>
+            <p>Elegí una temática para la ronda</p>
+            <form id="create-room-form" class="form-group">
+                <input type="text" name="room-topic" placeholder="Temática (opcional)" maxlength="60">
+                <button type="submit" class="btn btn-primary">Crear</button>
+            </form>
+            <button class="btn-link" data-action="home-back">Volver</button>`;
     }
 
     const userBadge = state.editingUsername
@@ -912,8 +901,6 @@ function renderRoom() {
             break;
     }
 
-    const shareUrl = window.location.origin + window.location.pathname + '#/room/' + encodeURIComponent(state.roomName);
-
     const votedUserIds = (phase === 'voting' || phase === 'results')
         ? new Set(videos.flatMap(v => v.votes))
         : new Set();
@@ -933,8 +920,9 @@ function renderRoom() {
         <div class="container">
             <div class="room-header">
                 <div class="share-row">
-                    <input type="text" value="${escapeHtml(shareUrl)}" readonly id="share-url">
-                    <button class="btn btn-small btn-secondary" data-action="copy-url">Copiar</button>
+                    <span class="room-code">${escapeHtml(state.roomName)}</span>
+                    <button class="btn btn-small btn-secondary" data-action="copy-code">Copiar código</button>
+                    <button class="btn btn-small btn-secondary" data-action="copy-url">Copiar link</button>
                 </div>
                 <div class="room-meta">
                     <span class="badge badge-phase">${phaseLabels[phase]}</span>
@@ -1184,40 +1172,8 @@ function sanitizeRoomName(name) {
         .replace(/^-|-$/g, '');
 }
 
-function checkRoomExists(roomName) {
-    const sanitized = sanitizeRoomName(roomName);
-    if (!sanitized) return Promise.resolve(false);
-    return new Promise((resolve) => {
-        let settled = false;
-        const finish = (result) => {
-            if (settled) return;
-            settled = true;
-            try { tempPeer.destroy(); } catch {}
-            resolve(result);
-        };
-        const tempPeer = new Peer();
-        const timeout = setTimeout(() => finish(false), 5000);
-        tempPeer.on('open', () => {
-            const conn = tempPeer.connect(PEER_PREFIX + sanitized, { reliable: true });
-            conn.on('open', () => {
-                clearTimeout(timeout);
-                conn.close();
-                finish(true);
-            });
-            conn.on('error', () => {
-                clearTimeout(timeout);
-                finish(false);
-            });
-        });
-        tempPeer.on('error', (err) => {
-            clearTimeout(timeout);
-            if (err.type === 'peer-unavailable') {
-                finish(false);
-            } else {
-                finish(false);
-            }
-        });
-    });
+function generateRoomCode() {
+    return Math.random().toString(36).substring(2, 8);
 }
 
 function escapeHtml(str) {
@@ -1227,15 +1183,20 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
+function copyRoomCode() {
+    navigator.clipboard.writeText(state.roomName).then(() => {
+        showToast('Código copiado', 'success');
+    }).catch(() => {
+        showToast('No se pudo copiar', 'error');
+    });
+}
+
 function copyShareUrl() {
-    const input = document.getElementById('share-url');
-    if (!input) return;
-    navigator.clipboard.writeText(input.value).then(() => {
+    const url = window.location.origin + window.location.pathname + '#/room/' + encodeURIComponent(state.roomName);
+    navigator.clipboard.writeText(url).then(() => {
         showToast('Link copiado', 'success');
     }).catch(() => {
-        input.select();
-        document.execCommand('copy');
-        showToast('Link copiado', 'success');
+        showToast('No se pudo copiar', 'error');
     });
 }
 
